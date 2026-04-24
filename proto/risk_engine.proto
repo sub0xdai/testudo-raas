@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package risk_engine;
+
+// CONTRACT: RISK EVALUATION SERVICE
+// STATELESS. HIGH-PERFORMANCE.
+service RiskService {
+  // VALIDATE ORDER AGAINST PORTFOLIO AND VOLATILITY
+  rpc ValidateOrder (RiskRequest) returns (RiskResponse);
+}
+
+// INPUT: RISK EVALUATION DATA
+message RiskRequest {
+  string request_id = 1;
+  bytes portfolio_state = 2;
+  bytes order_details = 3;
+  double asset_volatility = 4;
+}
+
+// OUTPUT: RISK EVALUATION RESULT
+message RiskResponse {
+  string request_id = 1;
+  bool is_approved = 2;
+  double kelly_adjusted_size = 3;
+  string rejection_reason = 4;
+}
