@@ -1,6 +1,9 @@
 # testudo-raas (Risk-as-a-Service)
 
-Stateless, high-performance gRPC microservice for real-time risk evaluation and position sizing.
+_`testudo-raas` is a gRPC microservice that answers one question: "Given my portfolio and this proposed trade,
+what's the safe position size?" It runs three mathematical models (Kelly Criterion, Fixed Fractional, Volatility-Adjusted) and picks
+the most conservative answer. It's stateless, validated, fuzz-tested, and deployable as a distroless container.
+The core capability: mathematical position sizing as a service — it tells you how much to bet, not what to bet on._
 
 ## TECHNICAL SPECIFICATION
 - **Runtime:** Rust (Edition 2024).
