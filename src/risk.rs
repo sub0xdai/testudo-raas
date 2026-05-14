@@ -21,7 +21,13 @@
 
 use std::fmt;
 
-/// Exhaustive error variants for risk evaluation.
+// Compile-time invariants — verify design integrity before execution.
+const _: () = {
+    assert!(std::mem::size_of::<InternalPortfolio>() <= 128);
+    assert!(std::mem::size_of::<InternalOrder>() <= 128);
+    assert!(std::mem::size_of::<RiskParams>() <= 128);
+    assert!(std::mem::size_of::<RiskError>() <= 16);
+};
 /// `TigerStyle`: typed errors, never stringly-typed.
 /// Callers match on variants; strings are derived via `Display`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,10 +285,10 @@ pub fn decode_portfolio(bytes: &[u8]) -> Result<InternalPortfolio, RiskError> {
     if bytes.len() != 32 {
         return Err(RiskError::PortfolioDecodeError);
     }
-    let balance = f64::from_le_bytes(bytes[0..8].try_into().unwrap());
-    let win_rate = f64::from_le_bytes(bytes[8..16].try_into().unwrap());
-    let avg_win = f64::from_le_bytes(bytes[16..24].try_into().unwrap());
-    let avg_loss = f64::from_le_bytes(bytes[24..32].try_into().unwrap());
+    let balance = read_f64_le(bytes, 0);
+    let win_rate = read_f64_le(bytes, 8);
+    let avg_win = read_f64_le(bytes, 16);
+    let avg_loss = read_f64_le(bytes, 24);
     Ok(InternalPortfolio { balance, win_rate, avg_win, avg_loss })
 }
 
@@ -297,13 +303,21 @@ pub fn decode_order(bytes: &[u8]) -> Result<InternalOrder, RiskError> {
     if bytes.len() != 16 {
         return Err(RiskError::OrderDecodeError);
     }
-    let entry_price = f64::from_le_bytes(bytes[0..8].try_into().unwrap());
-    let stop_price = f64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    let entry_price = read_f64_le(bytes, 0);
+    let stop_price = read_f64_le(bytes, 8);
     Ok(InternalOrder {
         entry_price,
         stop_price,
         asset_volatility: 0.0, // filled by caller from proto field
     })
+}
+
+/// Read an f64 from bytes at the given offset in little-endian format.
+/// Caller guarantees `offset + 8 <= bytes.len()`.
+fn read_f64_le(bytes: &[u8], offset: usize) -> f64 {
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&bytes[offset..offset + 8]);
+    f64::from_le_bytes(buf)
 }
 
 /// Adjust position size inversely to current volatility.
