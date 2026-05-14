@@ -694,4 +694,27 @@ mod tests {
             RiskError::OrderDecodeError
         );
     }
+
+    // ── Fuzz harness: random bytes → no panic ──
+
+    proptest! {
+        /// Feed random bytes to decode functions. Must never panic.
+        /// Returns either `Ok` or a typed `Err` — never crashes.
+        #[test]
+        fn fuzz_decode_portfolio_no_panic(bytes in prop::collection::vec(0u8..=255u8, 0..128)) {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                decode_portfolio(&bytes)
+            }));
+            // Must not panic.
+            prop_assert!(result.is_ok());
+        }
+
+        #[test]
+        fn fuzz_decode_order_no_panic(bytes in prop::collection::vec(0u8..=255u8, 0..128)) {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                decode_order(&bytes)
+            }));
+            prop_assert!(result.is_ok());
+        }
+    }
 }

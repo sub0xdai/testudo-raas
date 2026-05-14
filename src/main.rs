@@ -119,3 +119,107 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use risk_engine::risk_service_client::RiskServiceClient;
+    use tonic::transport::Channel;
+
+    fn build_portfolio_bytes(balance: f64, win_rate: f64, avg_win: f64, avg_loss: f64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(32);
+        buf.extend_from_slice(&balance.to_le_bytes());
+        buf.extend_from_slice(&win_rate.to_le_bytes());
+        buf.extend_from_slice(&avg_win.to_le_bytes());
+        buf.extend_from_slice(&avg_loss.to_le_bytes());
+        buf
+    }
+
+    fn build_order_bytes(entry_price: f64, stop_price: f64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(16);
+        buf.extend_from_slice(&entry_price.to_le_bytes());
+        buf.extend_from_slice(&stop_price.to_le_bytes());
+        buf
+    }
+
+    async fn connect(port: u16) -> RiskServiceClient<Channel> {
+        let addr = format!("http://127.0.0.1:{port}");
+        for _ in 0..50 {
+            if let Ok(client) = RiskServiceClient::connect(addr.clone()).await {
+                return client;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        RiskServiceClient::connect(addr).await.unwrap()
+    }
+
+    async fn start_test_server() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let addr = format!("127.0.0.1:{port}").parse().unwrap();
+        let service = RaasRiskService::default();
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(RiskServiceServer::new(service))
+                .serve(addr)
+                .await
+                .unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        port
+    }
+
+    #[tokio::test]
+    async fn integration_valid_request_returns_approved() {
+        let port = start_test_server().await;
+        let mut client = connect(port).await;
+        let request = RiskRequest {
+            request_id: "int-test-1".into(),
+            portfolio_state: build_portfolio_bytes(10000.0, 0.55, 1.5, 1.0),
+            order_details: build_order_bytes(50000.0, 49000.0),
+            asset_volatility: 1000.0,
+        };
+        let response = client
+            .validate_order(tonic::Request::new(request))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.is_approved);
+        assert!(response.kelly_adjusted_size > 0.0);
+    }
+
+    #[tokio::test]
+    async fn integration_empty_request_id_returns_error() {
+        let port = start_test_server().await;
+        let mut client = connect(port).await;
+        let request = RiskRequest {
+            request_id: String::new(),
+            portfolio_state: build_portfolio_bytes(10000.0, 0.55, 1.5, 1.0),
+            order_details: build_order_bytes(50000.0, 49000.0),
+            asset_volatility: 1000.0,
+        };
+        let err = client
+            .validate_order(tonic::Request::new(request))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn integration_garbage_bytes_returns_decode_error() {
+        let port = start_test_server().await;
+        let mut client = connect(port).await;
+        let request = RiskRequest {
+            request_id: "test".into(),
+            portfolio_state: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            order_details: build_order_bytes(50000.0, 49000.0),
+            asset_volatility: 1000.0,
+        };
+        let err = client
+            .validate_order(tonic::Request::new(request))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+}
