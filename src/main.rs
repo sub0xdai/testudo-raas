@@ -5,7 +5,11 @@
 use tonic::{transport::Server, Request, Response, Status, Code};
 use risk_engine::risk_service_server::{RiskService, RiskServiceServer};
 use risk_engine::{RiskRequest, RiskResponse};
-use crate::risk::{InternalPortfolio, InternalOrder, RiskParams, RiskResult, RiskError};
+use crate::risk::{
+    decode_order, decode_portfolio, InternalOrder, InternalPortfolio, RiskError, RiskParams,
+    RiskResult,
+};
+use std::time::Duration;
 
 #[allow(clippy::pedantic, clippy::missing_errors_doc, clippy::doc_markdown, clippy::default_trait_access)]
 pub mod risk_engine {
@@ -42,20 +46,11 @@ impl TryFrom<RiskRequest> for (InternalPortfolio, InternalOrder, String) {
             return Err(RiskError::RequestIdEmpty.into());
         }
 
-        // Decode: Mapping byte payloads to mathematical domain.
-        // Placeholder values used until byte decoding is implemented in CP-4.
-        let portfolio = InternalPortfolio {
-            balance: 10000.0,
-            win_rate: 0.55,
-            avg_win: 1.5,
-            avg_loss: 1.0,
-        };
-
-        let order = InternalOrder {
-            entry_price: 50000.0,
-            stop_price: 49000.0,
-            asset_volatility: req.asset_volatility,
-        };
+        // Decode: Map byte payloads to mathematical domain.
+        // TigerStyle: reject unknown formats instead of silently substituting data.
+        let portfolio = decode_portfolio(&req.portfolio_state)?;
+        let mut order = decode_order(&req.order_details)?;
+        order.asset_volatility = req.asset_volatility;
 
         Ok((portfolio, order, req.request_id))
     }
@@ -63,6 +58,9 @@ impl TryFrom<RiskRequest> for (InternalPortfolio, InternalOrder, String) {
 
 impl From<RiskResult> for RiskResponse {
     fn from(res: RiskResult) -> Self {
+        // Pair assertion: is_approved must be consistent with size > 0.
+        // Enforced here AND in risk::evaluate postcondition.
+        debug_assert_eq!(res.is_approved, res.size > 0.0);
         Self {
             request_id: res.request_id,
             is_approved: res.is_approved,
@@ -94,6 +92,11 @@ impl RiskService for RaasRiskService {
         // PHASE 2: COMPUTE (Pure Logic)
         let result = risk::evaluate(&portfolio, &order, &params, request_id);
 
+        // Pair assertion: result invariants checked before encoding.
+        debug_assert!(result.size.is_finite());
+        debug_assert!(result.size >= 0.0);
+        debug_assert_eq!(result.is_approved, result.size > 0.0);
+
         // PHASE 3: ENCODE (Internal -> Boundary)
         Ok(Response::new(result.into()))
     }
@@ -106,7 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("RaaS Boundary active. Listening on {addr}");
 
+    // TigerStyle: explicit resource limits — no unbounded defaults.
     Server::builder()
+        .max_connection_age(Duration::from_secs(300))
+        .max_concurrent_streams(256)
         .add_service(RiskServiceServer::new(risk_service))
         .serve(addr)
         .await?;

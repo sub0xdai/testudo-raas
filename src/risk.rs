@@ -268,6 +268,44 @@ pub fn kelly_criterion(win_rate: f64, avg_win: f64, avg_loss: f64) -> f64 {
     result
 }
 
+/// Decode portfolio state from a fixed-size 32-byte binary format.
+/// Layout: 4 × f64 little-endian (balance, win_rate, avg_win, avg_loss).
+///
+/// # Errors
+///
+/// Returns `Err(RiskError::PortfolioDecodeError)` if the byte slice is
+/// not exactly 32 bytes.
+pub fn decode_portfolio(bytes: &[u8]) -> Result<InternalPortfolio, RiskError> {
+    if bytes.len() != 32 {
+        return Err(RiskError::PortfolioDecodeError);
+    }
+    let balance = f64::from_le_bytes(bytes[0..8].try_into().unwrap());
+    let win_rate = f64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    let avg_win = f64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    let avg_loss = f64::from_le_bytes(bytes[24..32].try_into().unwrap());
+    Ok(InternalPortfolio { balance, win_rate, avg_win, avg_loss })
+}
+
+/// Decode order details from a fixed-size 16-byte binary format.
+/// Layout: 2 × f64 little-endian (entry_price, stop_price).
+///
+/// # Errors
+///
+/// Returns `Err(RiskError::OrderDecodeError)` if the byte slice is
+/// not exactly 16 bytes.
+pub fn decode_order(bytes: &[u8]) -> Result<InternalOrder, RiskError> {
+    if bytes.len() != 16 {
+        return Err(RiskError::OrderDecodeError);
+    }
+    let entry_price = f64::from_le_bytes(bytes[0..8].try_into().unwrap());
+    let stop_price = f64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    Ok(InternalOrder {
+        entry_price,
+        stop_price,
+        asset_volatility: 0.0, // filled by caller from proto field
+    })
+}
+
 /// Adjust position size inversely to current volatility.
 /// Caps the adjustment at 2× to prevent over-leveraging on
 /// transient volatility compression.
@@ -611,5 +649,49 @@ mod tests {
         };
         assert!(result.is_approved);
         assert!(result.reason.is_none());
+    }
+
+    // ── Byte decoding tests ──
+
+    #[test]
+    fn decode_portfolio_valid_bytes() {
+        let mut buf = [0u8; 32];
+        buf[0..8].copy_from_slice(&10000_f64.to_le_bytes());
+        buf[8..16].copy_from_slice(&0.55_f64.to_le_bytes());
+        buf[16..24].copy_from_slice(&1.5_f64.to_le_bytes());
+        buf[24..32].copy_from_slice(&1.0_f64.to_le_bytes());
+        let p = decode_portfolio(&buf).unwrap();
+        assert!((p.balance - 10000.0).abs() < 1e-10);
+        assert!((p.win_rate - 0.55).abs() < 1e-10);
+    }
+
+    #[test]
+    fn decode_portfolio_wrong_size() {
+        assert_eq!(
+            decode_portfolio(&[0u8; 16]).unwrap_err(),
+            RiskError::PortfolioDecodeError
+        );
+        assert_eq!(
+            decode_portfolio(&[0u8; 64]).unwrap_err(),
+            RiskError::PortfolioDecodeError
+        );
+    }
+
+    #[test]
+    fn decode_order_valid_bytes() {
+        let mut buf = [0u8; 16];
+        buf[0..8].copy_from_slice(&50000_f64.to_le_bytes());
+        buf[8..16].copy_from_slice(&49000_f64.to_le_bytes());
+        let o = decode_order(&buf).unwrap();
+        assert!((o.entry_price - 50000.0).abs() < 1e-10);
+        assert!((o.stop_price - 49000.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn decode_order_wrong_size() {
+        assert_eq!(
+            decode_order(&[0u8; 8]).unwrap_err(),
+            RiskError::OrderDecodeError
+        );
     }
 }
